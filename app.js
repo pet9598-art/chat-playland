@@ -8,12 +8,12 @@
       아래 placeholder를 반드시 교체하세요! (README 참고)
    ------------------------------------------------------------------ */
 const firebaseConfig = {
-  apiKey: "REPLACE_ME",
-  authDomain: "REPLACE_ME.firebaseapp.com",
-  projectId: "REPLACE_ME",
-  storageBucket: "REPLACE_ME.appspot.com",
-  messagingSenderId: "REPLACE_ME",
-  appId: "REPLACE_ME"
+  apiKey: "AIzaSyDVh6a7eg4NbdNHbVRrDChJ8gJcDP1Zmjs",
+  authDomain: "chatpaly-80f4d.firebaseapp.com",
+  projectId: "chatpaly-80f4d",
+  storageBucket: "chatpaly-80f4d.firebasestorage.app",
+  messagingSenderId: "456899549142",
+  appId: "1:456899549142:web:5df94fb959eaff9f65b677"
 };
 
 firebase.initializeApp(firebaseConfig);
