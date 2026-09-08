@@ -38,7 +38,9 @@ service cloud.firestore {
         // 본인 문서만 생성/수정 가능. 단, 방장은 게임 진행을 위해(탈락 처리 등) 다른 플레이어 문서도 수정 가능
         allow create: if isSignedIn() && request.auth.uid == uid;
         allow update: if isSignedIn() && (request.auth.uid == uid || isHost(roomId));
-        allow delete: if isSignedIn() && (request.auth.uid == uid || isHost(roomId));
+        // 방 정리(cascade delete) 시 누구나(방치된 다른 사람 문서 포함) 지울 수 있어야
+        // "방이 없어지면 데이터도 삭제" 요구사항을 지킬 수 있음
+        allow delete: if isSignedIn();
       }
 
       match /messages/{msgId} {
@@ -46,13 +48,18 @@ service cloud.firestore {
         // 일반 채팅 메시지는 본인 uid로만, 시스템 메시지(uid 없음)는 누구나 기록 가능
         allow create: if isSignedIn() &&
           (request.resource.data.uid == request.auth.uid || request.resource.data.system == true);
-        allow update, delete: if false;
+        allow update: if false;
+        // 방 정리(cascade delete) 시 누구나(방장이 아니어도) 메시지를 지울 수 있어야
+        // "방이 없어지면 채팅 데이터도 삭제" 요구사항을 지킬 수 있음
+        allow delete: if isSignedIn();
       }
 
       // 단어 마피아 비밀 정보: 본인 또는 방장만 읽을 수 있음 (핵심 보안 규칙)
       match /secrets/{uid} {
         allow read: if isSignedIn() && (request.auth.uid == uid || isHost(roomId));
-        allow write: if isHost(roomId);
+        allow create, update: if isHost(roomId);
+        // 방 정리(cascade delete) 시 누구나 지울 수 있어야 함
+        allow delete: if isSignedIn();
       }
     }
   }
