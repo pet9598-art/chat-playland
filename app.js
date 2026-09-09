@@ -75,6 +75,19 @@ function escapeHtml(s){
 }
 function randomFrom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
+// 방 비밀번호는 평문으로 저장하지 않고, 방 id로 salt를 섞은 가벼운 해시만 저장합니다.
+// (교실용 신뢰 기반 앱이라 암호학적 보안은 아니고, 로비에서 실수로 노출되는 걸 막는 정도입니다.)
+function simpleHash(str){
+  let h = 5381;
+  for(let i=0;i<str.length;i++){
+    h = ((h*33) ^ str.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(36);
+}
+function hashRoomPassword(roomId, pw){
+  return simpleHash(roomId + ":" + pw);
+}
+
 /* ------------------------------------------------------------------
    4. 아바타 그리기 (캔버스)
    ------------------------------------------------------------------ */
@@ -217,6 +230,7 @@ function subscribeRoomList(){
       snap.forEach(doc=>{
         const r = doc.data();
         if(r.status === "closed") return;
+        if(r.locked === true) return; // 방장이 잠근 방은 로비에서 숨김
         count++;
         const gt = GAME_TYPES[r.gameType] || GAME_TYPES.chat;
         const card = document.createElement("div");
@@ -224,7 +238,7 @@ function subscribeRoomList(){
         card.innerHTML = `
           <span class="tag" style="background:${gt.color}">${gt.emoji} ${gt.label}</span>
           <div class="meta">
-            <div class="name">${escapeHtml(r.name||"이름없음")}</div>
+            <div class="name">${r.passwordHash ? "🔒 " : ""}${escapeHtml(r.name||"이름없음")}</div>
             <div class="count">👥 ${r.playerCount||0} / ${r.maxPlayers||8}명</div>
           </div>
         `;
@@ -264,6 +278,7 @@ function initCreateModal(){
 
   $("#openCreateModal").addEventListener("click", ()=>{
     $("#roomNameInput").value = myNickname + "의 방";
+    $("#roomPasswordInput").value = "";
     $("#createModalBg").classList.add("active");
   });
   $("#cancelCreate").addEventListener("click", ()=>$("#createModalBg").classList.remove("active"));
@@ -275,11 +290,14 @@ async function createRoom(){
   let maxPlayers = parseInt($("#maxPlayersInput").value, 10);
   if(!maxPlayers || maxPlayers < 2) maxPlayers = 8;
   if(maxPlayers > 30) maxPlayers = 30;
+  const password = $("#roomPasswordInput").value.trim();
 
   const initState = initialStateFor(selectedGameType);
 
   try{
-    const ref = await db.collection("rooms").add({
+    // add() 대신 doc()으로 id를 먼저 만들어서, 비밀번호 해시에 방 id를 salt로 섞습니다.
+    const ref = db.collection("rooms").doc();
+    await ref.set({
       name,
       gameType: selectedGameType,
       hostUid: me.uid,
@@ -287,6 +305,8 @@ async function createRoom(){
       createdAt: FieldValue.serverTimestamp(),
       lastActivityAt: FieldValue.serverTimestamp(),
       status: "waiting",
+      locked: false,
+      passwordHash: password ? hashRoomPassword(ref.id, password) : "",
       playerCount: 0,
       maxPlayers,
       state: initState
@@ -315,31 +335,76 @@ function initialStateFor(gameType){
 /* ------------------------------------------------------------------
    7. 방 입장 / 퇴장 / 삭제(cascade)
    ------------------------------------------------------------------ */
+// 비밀번호 입력 모달을 Promise로 감싸서 사용 (취소 시 null)
+function askRoomPassword(roomName){
+  return new Promise(resolve=>{
+    $("#pwModalRoomName").textContent = `"${roomName}" 방에 입장하려면 비밀번호가 필요해요.`;
+    const input = $("#pwPromptInput");
+    input.value = "";
+    $("#pwModalBg").classList.add("active");
+    input.focus();
+
+    function cleanup(result){
+      $("#pwModalBg").classList.remove("active");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+      input.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    }
+    function onConfirm(){ cleanup(input.value); }
+    function onCancel(){ cleanup(null); }
+    function onKeydown(e){ if(e.key==="Enter") onConfirm(); }
+
+    const confirmBtn = $("#pwPromptConfirm");
+    const cancelBtn = $("#pwPromptCancel");
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    input.addEventListener("keydown", onKeydown);
+  });
+}
+
 async function joinRoom(roomId){
   try{
     const roomRef = db.collection("rooms").doc(roomId);
     const roomSnap = await roomRef.get();
     if(!roomSnap.exists){ toast("이미 사라진 방이에요"); return; }
     const room = roomSnap.data();
-    if((room.playerCount||0) >= (room.maxPlayers||8)){
-      toast("방이 가득 찼어요");
-      return;
-    }
 
     const playerRef = roomRef.collection("players").doc(me.uid);
     const already = await playerRef.get();
+
+    // 잠금/비밀번호는 "아직 이 방에 들어와 있지 않은 사람"에게만 적용 (기존 참가자는 그냥 재입장)
+    if(!already.exists){
+      if((room.playerCount||0) >= (room.maxPlayers||8)){
+        toast("방이 가득 찼어요");
+        return;
+      }
+      if(room.locked === true){
+        toast("방장이 새 참가자를 막아두었어요");
+        return;
+      }
+      if(room.passwordHash){
+        const pw = await askRoomPassword(room.name||"이름없음");
+        if(pw === null) return; // 취소
+        if(hashRoomPassword(roomId, pw) !== room.passwordHash){
+          toast("비밀번호가 틀렸어요");
+          return;
+        }
+      }
+    }
 
     await db.runTransaction(async tx=>{
       const fresh = await tx.get(roomRef);
       if(!fresh.exists) throw new Error("방이 이미 삭제되었어요");
       const data = fresh.data();
       if(!already.exists){
+        if((data.playerCount||0) >= (data.maxPlayers||8)) throw new Error("방이 가득 찼어요");
         tx.update(roomRef, { playerCount: (data.playerCount||0) + 1, lastActivityAt: FieldValue.serverTimestamp() });
       }
       tx.set(playerRef, {
         nickname: myNickname,
         avatar: myAvatar,
-        isHost: room.hostUid === me.uid,
+        isHost: data.hostUid === me.uid,
         alive: true,
         score: 0,
         joinedAt: already.exists ? (already.data().joinedAt||FieldValue.serverTimestamp()) : FieldValue.serverTimestamp()
@@ -382,6 +447,7 @@ function enterRoomView(roomId){
     renderRoomBar();
     renderStateBar();
     renderRoster();
+    if($("#settingsModalBg").classList.contains("active")) renderSettingsModal();
   });
 
   unsubPlayers = roomRef.collection("players").onSnapshot(snap=>{
@@ -414,20 +480,59 @@ async function exitToLobby(){
   showView("view-lobby");
 }
 
+function onLeaveClick(){
+  if(!currentRoomId) return;
+  const isHost = currentRoom && currentRoom.hostUid === me.uid;
+  const otherCount = Object.keys(players).filter(uid=>uid!==me.uid).length;
+  const msg = (isHost && otherCount>0)
+    ? "나가면 방장 권한이 가장 먼저 들어온 사람에게 넘어가요. 나갈까요?"
+    : "방에서 나갈까요?";
+  if(!confirm(msg)) return;
+  leaveRoom();
+}
+
 async function leaveRoom(){
   if(!currentRoomId) return;
   const roomId = currentRoomId;
   const roomRef = db.collection("rooms").doc(roomId);
+  const wasHost = currentRoom && currentRoom.hostUid === me.uid;
+
+  // 방장이 나가는데 남은 사람이 있으면, 그중 가장 먼저 들어온 사람이 방장 권한을 이어받습니다.
+  let newHostUid = null, newHostNickname = null;
+  if(wasHost){
+    const others = Object.entries(players)
+      .filter(([uid])=> uid !== me.uid)
+      .sort((a,b)=>{
+        const ta = a[1].joinedAt && a[1].joinedAt.toMillis ? a[1].joinedAt.toMillis() : 0;
+        const tb = b[1].joinedAt && b[1].joinedAt.toMillis ? b[1].joinedAt.toMillis() : 0;
+        return ta - tb;
+      });
+    if(others.length > 0){
+      newHostUid = others[0][0];
+      newHostNickname = others[0][1].nickname;
+    }
+  }
+
   try{
     await roomRef.collection("players").doc(me.uid).delete();
     let shouldDelete = false;
     await db.runTransaction(async tx=>{
       const fresh = await tx.get(roomRef);
       if(!fresh.exists) return;
-      const newCount = Math.max(0, (fresh.data().playerCount||1) - 1);
-      tx.update(roomRef, { playerCount: newCount, lastActivityAt: FieldValue.serverTimestamp() });
+      const data = fresh.data();
+      const newCount = Math.max(0, (data.playerCount||1) - 1);
+      const update = { playerCount: newCount, lastActivityAt: FieldValue.serverTimestamp() };
+      if(newHostUid && data.hostUid === me.uid){
+        update.hostUid = newHostUid;
+        update.hostNickname = newHostNickname;
+        tx.set(roomRef.collection("players").doc(newHostUid), { isHost:true }, { merge:true });
+      }
+      tx.update(roomRef, update);
       if(newCount <= 0) shouldDelete = true;
     });
+    if(newHostUid && !shouldDelete){
+      postSystemMessage(roomRef, `👑 방장이 나가서 ${newHostNickname}님이 새 방장이 되었어요`).catch(()=>{});
+    }
     exitToLobby();
     if(shouldDelete) deleteRoomCascade(roomId).catch(()=>{});
   }catch(err){
@@ -440,8 +545,39 @@ async function closeRoomAsHost(){
   if(!currentRoomId) return;
   if(!confirm("방을 닫으면 채팅 내용이 모두 사라져요. 닫을까요?")) return;
   const roomId = currentRoomId;
+  $("#settingsModalBg").classList.remove("active");
   exitToLobby();
   deleteRoomCascade(roomId).catch(()=>{});
+}
+
+async function toggleRoomLock(){
+  if(!currentRoomId || !currentRoom) return;
+  const roomRef = db.collection("rooms").doc(currentRoomId);
+  const next = !currentRoom.locked;
+  try{
+    await roomRef.update({ locked: next, lastActivityAt: FieldValue.serverTimestamp() });
+    toast(next ? "새 참가자 입장을 막았어요" : "새 참가자를 받을 수 있어요");
+  }catch(err){
+    console.error(err);
+    toast("설정 변경 실패: " + err.message);
+  }
+}
+
+async function saveRoomPassword(){
+  if(!currentRoomId) return;
+  const pw = $("#settingsPwInput").value.trim();
+  const roomRef = db.collection("rooms").doc(currentRoomId);
+  try{
+    await roomRef.update({
+      passwordHash: pw ? hashRoomPassword(currentRoomId, pw) : "",
+      lastActivityAt: FieldValue.serverTimestamp()
+    });
+    $("#settingsPwInput").value = "";
+    toast(pw ? "비밀번호를 설정했어요" : "비밀번호를 해제했어요");
+  }catch(err){
+    console.error(err);
+    toast("설정 변경 실패: " + err.message);
+  }
 }
 
 async function deleteRoomCascade(roomId){
@@ -476,15 +612,30 @@ function renderRoomBar(){
   $("#roomTypeLbl").textContent = gt.emoji + " " + gt.label;
 
   const isHost = currentRoom.hostUid === me.uid;
-  const hostBtn = $("#hostActionBtn");
-  if(isHost){
-    hostBtn.style.display = "inline-block";
-    hostBtn.textContent = "방 닫기";
-    hostBtn.className = "btn small danger";
-    hostBtn.onclick = closeRoomAsHost;
-  } else {
-    hostBtn.style.display = "none";
-  }
+  $("#settingsBtn").style.display = isHost ? "inline-block" : "none";
+}
+
+function openSettingsModal(){
+  if(!currentRoom) return;
+  renderSettingsModal();
+  $("#settingsPwInput").value = "";
+  $("#settingsModalBg").classList.add("active");
+}
+
+function renderSettingsModal(){
+  if(!currentRoom) return;
+  const locked = currentRoom.locked === true;
+  $("#lockStatusLbl").textContent = locked ? "🔒 새 참가자 입장 막힘" : "🔓 누구나 입장 가능";
+  const btn = $("#toggleLockBtn");
+  btn.textContent = locked ? "입장 열기" : "입장 막기";
+}
+
+function initSettingsModal(){
+  $("#settingsBtn").addEventListener("click", openSettingsModal);
+  $("#closeSettingsModal").addEventListener("click", ()=>$("#settingsModalBg").classList.remove("active"));
+  $("#toggleLockBtn").addEventListener("click", async ()=>{ await toggleRoomLock(); renderSettingsModal(); });
+  $("#savePwBtn").addEventListener("click", saveRoomPassword);
+  $("#deleteRoomBtn").addEventListener("click", closeRoomAsHost);
 }
 
 function renderRoster(){
@@ -547,7 +698,7 @@ function initChatBar(){
   $("#chatInput").addEventListener("keydown", e=>{
     if(e.key==="Enter") onSend();
   });
-  $("#leaveBtn").addEventListener("click", leaveRoom);
+  $("#leaveBtn").addEventListener("click", onLeaveClick);
 }
 
 async function onSend(){
@@ -602,6 +753,7 @@ window.addEventListener("DOMContentLoaded", ()=>{
   initLogin();
   initCreateModal();
   initChatBar();
+  initSettingsModal();
   setInterval(()=>{
     if(currentRoom && currentRoom.gameType==="wordchain") tickWordChain();
   }, 500);

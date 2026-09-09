@@ -133,12 +133,12 @@
   <!-- ===== ROOM VIEW ===== -->
   <div id="view-room" class="view">
     <div class="roombar">
-      <button class="btn secondary small" id="leaveBtn">←</button>
+      <button class="btn secondary small" id="leaveBtn" title="방 나가기">🚪 나가기</button>
       <div class="title">
         <div class="rname" id="roomNameLbl"></div>
         <div class="rtype" id="roomTypeLbl"></div>
       </div>
-      <button class="btn small" id="hostActionBtn" style="display:none;"></button>
+      <button class="btn small secondary" id="settingsBtn" style="display:none;" title="방 설정 (방장 전용)">⚙️</button>
     </div>
     <div class="statebar" id="stateBar"></div>
     <div class="roster" id="roster"></div>
@@ -161,10 +161,42 @@
     <div class="gametype-grid" id="gameTypeGrid"></div>
     <label>최대 인원</label>
     <input type="text" id="maxPlayersInput" value="8" inputmode="numeric">
+    <label style="margin-top:12px;">비밀번호 (선택)</label>
+    <input type="text" id="roomPasswordInput" maxlength="12" placeholder="비워두면 비밀번호 없이 누구나 입장">
     <div class="row" style="margin-top:14px;">
       <button class="btn secondary grow" id="cancelCreate">취소</button>
       <button class="btn grow" id="confirmCreate">방 만들기</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== PASSWORD PROMPT MODAL ===== -->
+<div class="modal-bg" id="pwModalBg">
+  <div class="modal">
+    <h3>🔒 비밀번호가 필요해요</h3>
+    <p class="sub" id="pwModalRoomName"></p>
+    <input type="text" id="pwPromptInput" maxlength="12" placeholder="비밀번호 입력">
+    <div class="row" style="margin-top:14px;">
+      <button class="btn secondary grow" id="pwPromptCancel">취소</button>
+      <button class="btn grow" id="pwPromptConfirm">입장하기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ROOM SETTINGS MODAL (방장 전용) ===== -->
+<div class="modal-bg" id="settingsModalBg">
+  <div class="modal">
+    <h3>⚙️ 방 설정 <span class="sub" style="font-size:12px;">(방장 전용)</span></h3>
+    <div class="row" style="align-items:center;justify-content:space-between;margin:12px 0;">
+      <span id="lockStatusLbl" style="font-weight:700;font-size:14px;"></span>
+      <button class="btn small secondary" id="toggleLockBtn"></button>
+    </div>
+    <label>비밀번호 설정 (비워두고 저장하면 비밀번호 해제)</label>
+    <input type="text" id="settingsPwInput" maxlength="12" placeholder="새 비밀번호">
+    <button class="btn small" id="savePwBtn" style="margin-top:8px;width:100%;">비밀번호 저장</button>
+    <hr style="margin:18px 0;border:none;border-top:1px solid var(--line);">
+    <button class="btn danger" id="deleteRoomBtn" style="width:100%;">🗑 방 완전히 닫기 (채팅 전부 삭제)</button>
+    <button class="btn secondary" id="closeSettingsModal" style="width:100%;margin-top:8px;">닫기</button>
   </div>
 </div>
 
