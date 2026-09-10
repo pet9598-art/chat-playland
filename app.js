@@ -28,7 +28,8 @@ const GAME_TYPES = {
   chat:      { emoji: "💬", label: "그냥 채팅",     color: "#3dc3ff", desc: "자유롭게 대화만 나눠요" },
   wordchain: { emoji: "🔤", label: "끝말잇기",       color: "#6bd67a", desc: "앞 단어의 끝글자로 시작!" },
   forbidden: { emoji: "🚫", label: "금지어 게임",    color: "#ff8a3d", desc: "정해진 금지어를 말하면 아웃" },
-  mafia:     { emoji: "🕵️", label: "범인을 찾아라",  color: "#c88bff", desc: "단어 마피아를 찾아내세요" }
+  mafia:     { emoji: "🕵️", label: "범인을 찾아라",  color: "#c88bff", desc: "단어 마피아를 찾아내세요" },
+  realone:   { emoji: "🧑‍🏫", label: "진짜를 찾아라",  color: "#ff5d5d", desc: "학생들 사이에 숨은 선생님을 찾아라!" }
 };
 
 const MAFIA_WORDS = [
@@ -328,6 +329,9 @@ function initialStateFor(gameType){
   }
   if(gameType === "mafia"){
     return { phase:"waiting", topicWord:"", mafiaCount:1, votes:{}, resultText:"" };
+  }
+  if(gameType === "realone"){
+    return { phase:"waiting", numberMap:{}, votes:{}, round:0, roundEndAt:0, resultText:"", revealText:"" };
   }
   return {};
 }
@@ -648,13 +652,26 @@ function renderRoster(){
   const mafiaVotePhase = currentRoom && currentRoom.gameType==="mafia" && currentRoom.state && currentRoom.state.phase==="vote";
   const myVote = mafiaVotePhase && currentRoom.state.votes ? currentRoom.state.votes[me.uid] : null;
 
+  const realoneNumberMap = (currentRoom && currentRoom.gameType==="realone" && currentRoom.state && currentRoom.state.phase && currentRoom.state.phase!=="waiting")
+    ? (currentRoom.state.numberMap || {}) : null;
+  const realoneVotePhase = !!realoneNumberMap && currentRoom.state.phase==="playing" && players[me.uid] && players[me.uid].alive !== false;
+  const myRealoneVote = realoneVotePhase && currentRoom.state.votes ? currentRoom.state.votes[me.uid] : null;
+
   for(const [uid, p] of entries){
+    const anon = realoneNumberMap && realoneNumberMap[uid] != null;
+    const displayName = anon ? `${realoneNumberMap[uid]}번` : escapeHtml(p.nickname);
+    const avatarHtml = anon
+      ? `<div class="avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;background:#ffe3c2;">${realoneNumberMap[uid]}</div>`
+      : `<img class="avatar" src="${p.avatar||''}">`;
+    const hostBadge = (!anon && p.isHost) ? '<span class="badge">방장</span>' : '';
+
     const chip = document.createElement("div");
     chip.className = "pchip" + (p.alive===false ? " dead" : "") + (uid===turnUid ? " turn" : "");
     chip.innerHTML = `
-      <img class="avatar" src="${p.avatar||''}">
-      <div class="nm">${escapeHtml(p.nickname)}${p.isHost?'<span class="badge">방장</span>':''}</div>
+      ${avatarHtml}
+      <div class="nm">${displayName}${hostBadge}</div>
       ${mafiaVotePhase && uid!==me.uid ? `<button class="btn small voteBtn ${myVote===uid?'':'secondary'}" data-vote-uid="${uid}">${myVote===uid?'투표함':'지목'}</button>` : ""}
+      ${realoneVotePhase && uid!==me.uid && p.alive!==false ? `<button class="btn small voteBtn ${myRealoneVote===uid?'':'secondary'}" data-realone-vote-uid="${uid}">${myRealoneVote===uid?'투표함':'지목'}</button>` : ""}
     `;
     roster.appendChild(chip);
   }
@@ -662,6 +679,11 @@ function renderRoster(){
   if(mafiaVotePhase){
     roster.querySelectorAll("[data-vote-uid]").forEach(btn=>{
       btn.addEventListener("click", ()=>castMafiaVote(btn.getAttribute("data-vote-uid")));
+    });
+  }
+  if(realoneVotePhase){
+    roster.querySelectorAll("[data-realone-vote-uid]").forEach(btn=>{
+      btn.addEventListener("click", ()=>castRealOneVote(btn.getAttribute("data-realone-vote-uid")));
     });
   }
 }
@@ -674,10 +696,17 @@ function appendMessage(m){
   if(m.system){
     div.innerHTML = `<div class="bubble">${escapeHtml(m.text)}</div>`;
   } else {
+    const realoneNumberMap = (currentRoom && currentRoom.gameType==="realone" && currentRoom.state && currentRoom.state.phase && currentRoom.state.phase!=="waiting")
+      ? (currentRoom.state.numberMap || {}) : null;
+    const anon = realoneNumberMap && realoneNumberMap[m.uid] != null;
+    const nm = anon ? `${realoneNumberMap[m.uid]}번` : escapeHtml(m.nickname);
+    const avatarHtml = anon
+      ? `<div class="avatar" style="display:flex;align-items:center;justify-content:center;font-weight:700;background:#ffe3c2;flex-shrink:0;">${realoneNumberMap[m.uid]}</div>`
+      : `<img class="avatar" src="${m.avatar||''}">`;
     div.innerHTML = `
-      <img class="avatar" src="${m.avatar||''}">
+      ${avatarHtml}
       <div>
-        <div class="nm">${escapeHtml(m.nickname)}</div>
+        <div class="nm">${nm}</div>
         <div class="bubble">${escapeHtml(m.text)}</div>
       </div>`;
   }
@@ -714,6 +743,8 @@ async function onSend(){
     await handleForbiddenSubmit(text);
   } else if(gameType === "mafia"){
     await handleMafiaChatSubmit(text);
+  } else if(gameType === "realone"){
+    await handleRealOneChatSubmit(text);
   } else {
     await postPlainMessage(text, false);
   }
@@ -743,6 +774,8 @@ function renderStateBar(){
     renderForbiddenBar(bar);
   } else if(gt === "mafia"){
     renderMafiaBar(bar);
+  } else if(gt === "realone"){
+    renderRealOneBar(bar);
   }
 }
 
@@ -756,5 +789,6 @@ window.addEventListener("DOMContentLoaded", ()=>{
   initSettingsModal();
   setInterval(()=>{
     if(currentRoom && currentRoom.gameType==="wordchain") tickWordChain();
+    if(currentRoom && currentRoom.gameType==="realone") tickRealOne();
   }, 500);
 });
