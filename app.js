@@ -89,6 +89,11 @@ function hashRoomPassword(roomId, pw){
   return simpleHash(roomId + ":" + pw);
 }
 
+// 관리자(선생님) 비밀번호도 평문으로 저장하지 않고 해시만 저장합니다.
+// 기본 비밀번호는 "hurian2026" 입니다. 바꾸고 싶다면 브라우저 콘솔에서
+// simpleHash("새 비밀번호") 를 실행해 나온 값을 아래 ADMIN_PASSWORD_HASH에 넣으세요.
+const ADMIN_PASSWORD_HASH = "1bj6nhm";
+
 /* ------------------------------------------------------------------
    4. 아바타 그리기 (캔버스)
    ------------------------------------------------------------------ */
@@ -602,6 +607,55 @@ async function deleteRoomCascade(roomId){
   await roomRef.delete().catch(()=>{});
 }
 
+/* ------------------------------------------------------------------
+   7-1. 관리자 기능 (선생님 전용) - 열려있는 모든 방을 한 번에 정리
+   ------------------------------------------------------------------ */
+function initAdminModal(){
+  $("#adminLink").addEventListener("click", ()=>{
+    $("#adminPwInput").value = "";
+    $("#adminModalBg").classList.add("active");
+    setTimeout(()=>$("#adminPwInput").focus(), 50);
+  });
+  $("#adminPwCancel").addEventListener("click", ()=>$("#adminModalBg").classList.remove("active"));
+  $("#adminPwConfirm").addEventListener("click", onAdminPwConfirm);
+  $("#adminPwInput").addEventListener("keydown", e=>{ if(e.key==="Enter") onAdminPwConfirm(); });
+}
+
+function onAdminPwConfirm(){
+  const pw = $("#adminPwInput").value;
+  if(simpleHash(pw) !== ADMIN_PASSWORD_HASH){
+    toast("비밀번호가 틀렸어요");
+    return;
+  }
+  $("#adminModalBg").classList.remove("active");
+  if(!confirm("정말 열려있는 모든 방을 삭제할까요?\n채팅 내용도 모두 사라지고 되돌릴 수 없어요.")) return;
+  deleteAllRoomsAsAdmin();
+}
+
+async function deleteAllRoomsAsAdmin(){
+  toast("모든 방을 정리하는 중...");
+  try{
+    const snap = await db.collection("rooms").get();
+    const ids = snap.docs.map(d=>d.id);
+    let done = 0;
+    for(const id of ids){
+      try{
+        // 방 상태(hostUid 포함) 수정은 누구나 가능한 "교실 신뢰 기반" 규칙을 이용해,
+        // 관리자가 스스로를 임시 방장으로 지정한 뒤 방장 권한으로 완전히 정리합니다.
+        await db.collection("rooms").doc(id).update({ hostUid: me.uid });
+        await deleteRoomCascade(id);
+        done++;
+      }catch(e){
+        console.error("방 삭제 실패:", id, e);
+      }
+    }
+    toast(ids.length ? `${done}개 방을 모두 정리했어요` : "정리할 방이 없어요");
+  }catch(err){
+    console.error(err);
+    toast("방 삭제 중 오류가 발생했어요: " + err.message);
+  }
+}
+
 // 참고: 브라우저를 그냥 닫으면 자동 퇴장이 100% 보장되지 않습니다.
 // (Firestore 쓰기는 비동기라 unload 시점에 완료를 보장할 수 없음)
 // 방장이 "방 닫기" 버튼으로 정리하거나, 로비의 방치된 빈 방 자동 정리 로직이 뒤처리합니다.
@@ -787,6 +841,7 @@ window.addEventListener("DOMContentLoaded", ()=>{
   initCreateModal();
   initChatBar();
   initSettingsModal();
+  initAdminModal();
   setInterval(()=>{
     if(currentRoom && currentRoom.gameType==="wordchain") tickWordChain();
     if(currentRoom && currentRoom.gameType==="realone") tickRealOne();
