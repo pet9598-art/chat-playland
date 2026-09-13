@@ -90,9 +90,9 @@ function hashRoomPassword(roomId, pw){
 }
 
 // 관리자(선생님) 비밀번호도 평문으로 저장하지 않고 해시만 저장합니다.
-// 기본 비밀번호는 "hurian2026" 입니다. 바꾸고 싶다면 브라우저 콘솔에서
+// 현재 비밀번호는 "5105" 입니다. 바꾸고 싶다면 브라우저 콘솔에서
 // simpleHash("새 비밀번호") 를 실행해 나온 값을 아래 ADMIN_PASSWORD_HASH에 넣으세요.
-const ADMIN_PASSWORD_HASH = "1bj6nhm";
+const ADMIN_PASSWORD_HASH = "yhsmjo";
 
 /* ------------------------------------------------------------------
    4. 아바타 그리기 (캔버스)
